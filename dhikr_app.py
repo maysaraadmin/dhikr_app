@@ -10,6 +10,7 @@ from kivy.clock import Clock
 from datetime import datetime, timedelta
 import requests
 
+
 class DhikrApp(App):
     def build(self):
         self.title = "تطبيق الأذكار"
