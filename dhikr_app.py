@@ -5,41 +5,61 @@ from kivy.uix.button import Button
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.popup import Popup
+from kivy.core.text import LabelBase
+from kivy.lang import Builder
 from datetime import datetime, timedelta
 import requests
 import os
+from arabic_reshaper import reshape
+from bidi.algorithm import get_display
 
-# تحديد مسار الخط العربي
-FONT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "Tajawal-Regular.ttf"))
+# Load RTL support
+Builder.load_string('''
+<RLabel@Label>:
+    halign: 'right'
+    text_size: self.width, None
+    font_name: app.font_name
+    padding_x: 20
+''')
 
-# التحقق مما إذا كان الخط موجودًا
-if not os.path.exists(FONT_PATH):
-    print("تحذير: ملف الخط غير موجود! تأكد من وضع 'Tajawal-Regular.ttf' في نفس مجلد السكريبت.")
+# Arabic text shaping and bidi support
+def arabic_text(text):
+    """Reshapes and applies Bidi algorithm to Arabic text."""
+    return get_display(reshape(text))
+
+# Load Arabic font
+FONT_PATH = os.path.join(os.path.dirname(__file__), "Tajawal-Regular.ttf")
+DEFAULT_FONT = 'Tajawal' if os.path.exists(FONT_PATH) else 'Arial'
+if DEFAULT_FONT == 'Tajawal':
+    LabelBase.register(name='Tajawal', fn_regular=FONT_PATH)
 
 class DhikrApp(App):
-    def build(self):
-        self.title = "تطبيق الأذكار"
-        self.root = BoxLayout(orientation='vertical', padding=10, spacing=10)
+    font_name = DEFAULT_FONT  # Global font access
 
-        # واجهة الأذكار
+    def build(self):
+        self.title = arabic_text("تطبيق الأذكار")
+        root = BoxLayout(orientation='vertical', padding=10, spacing=10)
+
+        # Scrollable layout for Azkar
         self.dhikr_layout = GridLayout(cols=1, spacing=10, size_hint_y=None)
         self.dhikr_layout.bind(minimum_height=self.dhikr_layout.setter('height'))
-
-        scroll_view = ScrollView(size_hint=(1, 0.8))
+        scroll_view = ScrollView(size_hint=(1, 1), do_scroll_x=False)
         scroll_view.add_widget(self.dhikr_layout)
-        self.root.add_widget(scroll_view)
+        root.add_widget(scroll_view)
 
-        # زر لحساب الثلث الأخير من الليل
-        self.calculate_button = Button(
-            text="حساب الثلث الأخير من الليل",
-            size_hint=(1, 0.1),
+        # Button to calculate last third of the night
+        calculate_button = Button(
+            text=arabic_text("حساب الثلث الأخير من الليل"),
+            size_hint=(1, None),
+            height=50,
             background_color=(0.2, 0.6, 0.8, 1),
-            color=(1, 1, 1, 1)
+            color=(1, 1, 1, 1),
+            font_name=self.font_name
         )
-        self.calculate_button.bind(on_press=self.calculate_last_third)
-        self.root.add_widget(self.calculate_button)
+        calculate_button.bind(on_press=self.calculate_last_third)
+        root.add_widget(calculate_button)
 
-        # إضافة الأذكار
+        # Adding Azkar
         self.add_dhikr("أذكار الصباح", [
             ("سبحان الله وبحمده", 100),
             ("لا إله إلا الله وحده لا شريك له", 10),
@@ -62,110 +82,90 @@ class DhikrApp(App):
             ("لا إله إلا الله وحده لا شريك له، له الملك وله الحمد وهو على كل شيء قدير", 10)
         ])
 
-        return self.root
+        return root
 
     def add_dhikr(self, title, dhikr_list):
+        """Adds a section of Azkar to the UI."""
         self.dhikr_layout.add_widget(Label(
-            text=title,
+            text=arabic_text(title),
             size_hint_y=None,
-            height=40,
+            height=50,
             font_size=20,
-            color=[0.9, 0.9, 0, 1],  # لون أصفر
+            color=[0.9, 0.9, 0, 1],  # Yellow color
             bold=True,
-            font_name=FONT_PATH
+            font_name=self.font_name,
+            halign='right',
+            text_size=(self.dhikr_layout.width, None)
         ))
+
         for dhikr, count in dhikr_list:
-            dhikr_label = Label(
-                text=f"{dhikr} - {count} مرة",
+            self.dhikr_layout.add_widget(Label(
+                text=arabic_text(f"{dhikr} - {count} مرة"),
                 size_hint_y=None,
                 height=40,
                 font_size=16,
-                color=[0.8, 0.8, 0.8, 1],  # لون رمادي
-                font_name=FONT_PATH
-            )
-            self.dhikr_layout.add_widget(dhikr_label)
+                color=[0.8, 0.8, 0.8, 1],  # Gray color
+                font_name=self.font_name,
+                halign='right',
+                text_size=(self.dhikr_layout.width, None)
+            ))
+
+    def fetch_prayer_times(self):
+        """Fetches prayer times from the API."""
+        params = {
+            "latitude": 24.7136,
+            "longitude": 46.6753,
+            "timezone": "Asia/Riyadh",
+            "method": 4
+        }
+        try:
+            response = requests.get("http://api.pray.zone/v2/times/today.json", params=params)
+            response.raise_for_status()  # Raise error for bad responses
+            data = response.json()
+            return data["results"]["datetime"][0]["times"]
+        except (requests.RequestException, KeyError):
+            return None
 
     def calculate_last_third(self, instance):
-        try:
-            params = {
-                "latitude": 24.7136,
-                "longitude": 46.6753,
-                "timezone": "Asia/Riyadh",
-                "method": 4
-            }
-            response = requests.get("http://api.pray.zone/v2/times/today.json", params=params)
-            
-            if response.status_code != 200:
-                raise Exception("فشل في جلب البيانات من API")
+        """Calculates and displays the last third of the night."""
+        prayer_times = self.fetch_prayer_times()
+        if not prayer_times or "Maghrib" not in prayer_times or "Fajr" not in prayer_times:
+            self.show_popup("خطأ", "فشل في جلب أوقات الصلاة")
+            return
 
-            data = response.json()
-            if "results" not in data or "datetime" not in data["results"]:
-                raise Exception("بيانات غير متوفرة في الاستجابة")
+        today = datetime.now()
+        maghrib_dt = datetime.combine(today.date(), datetime.strptime(prayer_times["Maghrib"], "%H:%M").time())
+        fajr_dt = datetime.combine(today.date() + timedelta(days=1), datetime.strptime(prayer_times["Fajr"], "%H:%M").time())
 
-            prayer_times = data["results"]["datetime"][0]["times"]
+        last_third_start = fajr_dt - (fajr_dt - maghrib_dt) / 3
+        self.show_popup("الثلث الأخير من الليل", f"يبدأ الثلث الأخير من الليل في: {last_third_start.strftime('%H:%M')}")
 
-            if "Maghrib" not in prayer_times or "Fajr" not in prayer_times:
-                raise Exception("أوقات الصلاة غير متاحة")
-
-            # تحديد التاريخ الحالي
-            today = datetime.today().date()
-            maghrib_time = datetime.strptime(prayer_times["Maghrib"], "%H:%M").replace(year=today.year, month=today.month, day=today.day)
-            fajr_time = datetime.strptime(prayer_times["Fajr"], "%H:%M").replace(year=today.year, month=today.month, day=today.day + 1)
-
-            # حساب الثلث الأخير
-            night_duration = fajr_time - maghrib_time
-            third_duration = night_duration / 3
-            last_third_start = fajr_time - third_duration
-
-            popup = Popup(
-                title='الثلث الأخير من الليل',
-                size_hint=(0.8, 0.4),
-                title_size=20,
-                background_color=[0.2, 0.2, 0.2, 1]
-            )
-            content = BoxLayout(orientation='vertical', padding=10, spacing=10)
-            content.add_widget(Label(
-                text=f"يبدأ الثلث الأخير من الليل في: {last_third_start.strftime('%H:%M')}",
-                color=[1, 1, 1, 1],
-                font_size=18,
-                font_name=FONT_PATH
-            ))
-            close_button = Button(
-                text="إغلاق",
-                size_hint=(1, 0.3),
-                background_color=(0.8, 0.2, 0.2, 1),
-                color=(1, 1, 1, 1)
-            )
-            close_button.bind(on_press=popup.dismiss)
-            content.add_widget(close_button)
-            popup.content = content
-            popup.open()
-
-        except Exception as e:
-            popup = Popup(
-                title='خطأ',
-                size_hint=(0.8, 0.4),
-                title_size=20,
-                background_color=[0.2, 0.2, 0.2, 1]
-            )
-            content = BoxLayout(orientation='vertical', padding=10, spacing=10)
-            content.add_widget(Label(
-                text=f"حدث خطأ: {str(e)}",
-                color=[1, 1, 1, 1],
-                font_size=18,
-                font_name=FONT_PATH
-            ))
-            close_button = Button(
-                text="إغلاق",
-                size_hint=(1, 0.3),
-                background_color=(0.8, 0.2, 0.2, 1),
-                color=(1, 1, 1, 1)
-            )
-            close_button.bind(on_press=popup.dismiss)
-            content.add_widget(close_button)
-            popup.content = content
-            popup.open()
-
+    def show_popup(self, title, message):
+        """Displays a popup with a given title and message."""
+        popup = Popup(
+            title=arabic_text(title),
+            size_hint=(0.8, 0.4)
+        )
+        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        content.add_widget(Label(
+            text=arabic_text(message),
+            color=[1, 1, 1, 1],
+            font_size=18,
+            font_name=self.font_name,
+            halign='right',
+            text_size=(None, None)
+        ))
+        close_button = Button(
+            text=arabic_text("إغلاق"),
+            size_hint=(1, 0.3),
+            background_color=(0.8, 0.2, 0.2, 1),
+            color=(1, 1, 1, 1),
+            font_name=self.font_name
+        )
+        close_button.bind(on_press=popup.dismiss)
+        content.add_widget(close_button)
+        popup.content = content
+        popup.open()
 
 if __name__ == '__main__':
     DhikrApp().run()
